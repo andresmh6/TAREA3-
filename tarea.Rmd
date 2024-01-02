@@ -1,0 +1,231 @@
+---
+title: "TAREA 3 GRUPO 2"
+author: "Andrés Méndez Hurtado, Gloria Álvarez Alegría, Lucia De los Santos Carrascal, Manuel Anglada Reina y Pablo Rafael Pombero Hurtado "
+date: "2023-12-28"
+output: html_document
+---
+# Leemos los TFs
+```{r}
+library(igraph)
+tfs.data = read.table("targets.txt", as.is=T)
+tfs = tfs.data$V1
+tfs
+length(tfs)
+```
+
+#Leemos los genes que se regulan por cada FT
+
+```{r}
+genes.in.net=c()
+for(i in 1:length(tfs))
+{
+  cur.tf.file=paste0(tfs[i], ".txt", sep="")
+  cur.tf.data=read.table(cur.tf.file, as.is=T)
+  cur.tf.targets= cur.tf.data$V1
+  genes.in.net= c(genes.in.net, cur.tf.targets)
+}
+
+length(genes.in.net)
+length(unique(genes.in.net))
+head(genes.in.net)
+```
+
+# Creamos la matriz de adyacencia 
+En un principio inicializamos a "0" todas las posiciones. Se trata de una matriz cuadrada en la que aparecen todos los genes no repetidos por filas y columnas. Nombramos filas y columnas con los respectivos nombres de los genes. 
+
+```{r}
+adj.matrix=matrix(0, nrow = length(unique(genes.in.net)), ncol = length(unique(genes.in.net)))
+dim(adj.matrix)
+
+rownames(adj.matrix)=unique(genes.in.net)
+colnames(adj.matrix)=unique(genes.in.net)
+```
+
+# Comprobamos que nuestros TFs estan en las listas de regulomas. 
+
+```{r}
+sum (tfs %in% genes.in.net)
+```
+
+Como el resultado de la suma es igual al número de TFs de la red, no tenemos que añadirlos manualmente. 
+
+# Rellenamos la matriz de adyacencia 
+
+Rellenamos con "1" en las posiciones que existe regulación del TF (fila) sobre el gen dado (columna). 
+
+```{r}
+i=1
+for(i in 1:length(tfs))
+{
+  cur.tf=tfs[i]
+  cur.tf.file=read.table(paste0(cur.tf, ".txt"))
+  cur.tf.vec=cur.tf.file$V1
+  adj.matrix[cur.tf, cur.tf.vec]=1
+}
+
+sum(adj.matrix)
+```
+
+
+# Creamos la red 
+
+Esto lo hacemos a partir de la matriz de adyacencia con la función graph.adjacency y la guardamos en formato gml. 
+
+```{r}
+library(igraph)
+
+transcriptional.network=graph.adjacency(adj.matrix, mode= "directed")
+class(transcriptional.network)
+
+write.graph(transcriptional.network, "my_network.gml", format = "gml")
+```
+
+# Comprobamos si la red es libre de escala.
+
+## Histograma de la distribución del grado de los nodos 
+
+Observamos gráficamente la distribución del grado de los nodos (teniendo en cuenta grados de entrada y salida) para ver si se ajusta a una red libre de escala (Se dice que una red es libre de escala cuando su distribución del grado de los nodos se ajusta a una ley potencial negativa).
+
+```{r}
+net.degrees=degree(transcriptional.network, mode = "total")
+head(net.degrees)
+
+hist(net.degrees)
+```
+
+Existen nodos altamente conectados, mientras que el resto presenta conexiones bastante limitadas. Esta característica se cumple de manera radical, tanto, que deja de ajustarse a simple vista a una ley potencial negativa por lo que en principio no tendríamos seguridad de un correcto ajuste.
+
+##  Test de Kolmogorov-Smirnoff
+
+Hacemos el test de Kolmogorov-Smirnoff para comprobar si la distribución del grado de los nodos (net.degree) se ajusta a una potencial negativa, es decir, para comprobar si se trata de una red libre de escala. En este test la hipótesis nula afirma que la distribución del grado de los nodos se ajusta a una potencial negativa y la hipótesis alternativa afirma lo contrario.
+
+```{r}
+power.law.fit(net.degrees)
+```
+
+
+# Regresion lineal
+
+En este enfoque, se aplica una transformación logarítmica a la distribución de los grados de los nodos. Dichas transformaciones convierten las potencias negativas en líneas rectas con pendiente negativa. Por lo tanto, para evaluar la adecuación a una ley de potencia negativa, simplemente se realiza una regresión lineal en los datos transformados. Se verifica que el coeficiente de determinación correspondiente \(R^2\), que indica el porcentaje de varianza explicada por el ajuste, sea suficientemente alto, y que el valor de p correspondiente sea lo suficientemente bajo.
+
+```{r}
+node.degree.freq=table(net.degrees)
+node.degree.freq
+lm.res=lm(log(node.degree.freq) ~ as.numeric(names(node.degree.freq)))
+summary(lm.res)
+```
+
+# Lectura y visualización gráfica de la red
+
+```{r}
+transcriptional.network=read_graph("my_network.gml", format = "gml")
+
+par(mar = c(0, 0, 0, 0))
+plot.igraph(transcriptional.network, vertex.size = 2, vertex.label = NA, edge.width = 0.5, arrow.size = 0.5, edge.arrow.size = 0.1, layout = layout_with_fr, main = "Transcriptional Network", vertex.label.color = "black", vertex.frame.color = NA)
+```
+
+#MOTIVOS DE RED 
+Al no contar con datos de RNA-Seq no podremos saber si las distintas regulaciones son positivas o negativas, por lo que nos limitaremos a conocer los motivos de red de 1, 2 y 3 nodos de forma genérica. 
+
+Observamos la diagonal de la matriz de adyacencia para contar los "1" en la matriz. Al sumar los números (1 o 0), obtenemos el número de autorregulaciones. Para evaluar la significancia, creamos redes aleatorias y registramos el número de autorregulaciones en cada iteración. Contamos cuántas veces este número es superior al de nuestras autorregulaciones reales. Luego, dividimos este recuento por el número total de iteraciones y obtenemos un p-valor. Si el p-valor es menor a 0.05, significa que menos del 5% de las veces la red aleatoria tiene más autorregulaciones que nuestra red real, lo cual indica que es un motivo significativo.
+
+Para crear redes aleatorias, aseguramos que el número de nodos fuente de interacciones sea el mismo y que las conexiones vayan de manera aleatoria, es decir, que el mismo número de genes regulados por factores de transcripción (TF) tenga la misma topología. Luego, comparamos si las regulaciones, ya sean positivas o negativas, son más frecuentes en nuestra red real en comparación con las redes aleatorias. Si encontramos que son más frecuentes en las redes aleatorias, esto sugiere un antimotivo en nuestra red.
+
+
+tfs.adj = as.matrix(get.adjacency(transcriptional.network))
+class(tfs.adj)
+sum(diag(tfs.adj))
+
+#tenemos 14 autorregulaciones ahora veremos si es motivo de red
+#creamos muchas redes aleatorias y vemos cuantas veces tienen esto. 
+
+num.nodos.al=ncol(tfs.adj)
+#deberiamos asignar TFs aleatoriamente sin que necesariamente coincidan con los de nuestra red
+
+out.degree=degree(transcriptional.network, mode = "out")
+
+
+size=sum(out.degree != 0)
+#este caso es raro, normalmente no todos los nodos van a ser TFs, eso sería size
+random.tfs=sample(x=1:num.nodos.al, size=sum(out.degree != 0), replace = F)
+length(random.tfs)
+#la longitus de random.tfs son el numero de TF en nuestra redes aleatorias que debe ser el mismo que en la original
+#podemos elegir TFs en red, son los únicos con grado de salida, siendo fuente de la interaccion
+
+random.adj = matrix(0, nrow=num.nodos.al, ncol=num.nodos.al)
+dim(random.adj)
+#dentro de cada nodo no todos tienen el mimso numero de conexiones de salida. 
+out.tfs.true=out.degree[out.degree != 0]
+
+for (i in 1:length(random.tfs))
+{
+  random.adj[i, sample(x=1:num.nodos.al,size = out.tfs.true[i], replace= F)] = 1
+}
+sum(random.adj)
+
+sum(diag(random.adj))
+
+#no poner pvalor 0
+#__________________________________________________________________________________________________________________
+
+#MOTIVOS DE DOS NODOS: CORREGULACIONES ES LO QUE VAMOS A VER AHORA
+#LO QUE SE TIENE QUE CUMPLIR ES QUE EN (i,j)=(j,i)=1
+#multiplica (i,j) * (j,i), solo los que den 1 son corregulacion
+#si multiplicamos matriz por traspuesta, solo habra 1 donde haya corregulacion, aunque puede haber sitios donde haya
+#1 y no lo sea, la diagonal, que son eutorregulaciones, esas no. 
+
+true.cor =(sum(tfs.adj*t(tfs.adj)) - sum (diag(tfs.adj)))/2
+
+##tenemos 28 corregulaicones, nos quedamos con los 1 y eliminamos aquellos que eran autorregulaciones de la diag,
+#hay que dividir entre 2 para que no cuente por separado (i,j) y (j,i), es autorregulacion, se cuenta como una
+
+#crearemos mayor numero de redes aleatorias para establecer p valor. 
+
+#COMO GENERAR MUCHAS REDES ALEATORIAS
+
+# Cálculo de autorregulaciones y correlaciones
+true.num.auto = sum(diag(tfs.adj))
+true.num.cor = (sum(tfs.adj * t(tfs.adj)) - sum(diag(tfs.adj))) / 2
+
+random.auto = c()
+random.correg = c()
+random.3.nodes = matrix(0, nrow = 100, ncol = 16)  # Cambia 100 al número real de randomizaciones
+
+number.randomizations = 100
+
+for (j in 1:number.randomizations) {
+  random.tfs = sample(x = 1:num.nodos.al, size = sum(out.degree != 0), replace = FALSE)
+  random.adj = matrix(0, nrow = num.nodos.al, ncol = num.nodos.al)
+  
+  for (i in 1:length(random.tfs)) {
+    random.adj[random.tfs[i], sample(x = 1:num.nodos.al, size = out.tfs.true[i], replace = FALSE)] = 1
+  }
+  
+  current.num.auto = sum(diag(random.adj))
+  current.num.cor = (sum(random.adj * t(random.adj)) - current.num.auto) / 2
+  
+  random.auto = c(random.auto, current.num.auto)
+  random.correg = c(random.correg, current.num.cor)
+  
+  # Cálculo de motivos de 3 nodos
+  random.graph = graph.adjacency(random.adj, mode = "directed")
+  current.3.nodes = graph.motifs(graph = random.graph, size = 3)
+  random.3.nodes[j,] = current.3.nodes
+}
+
+# Verificación de autorregulaciones y correlaciones
+p_value_auto = sum(true.num.auto <= random.auto) / number.randomizations
+p_value_cor = sum(true.num.cor <= random.correg) / number.randomizations
+
+# Verificación de motivos de 3 nodos
+true.3.nodes = graph.motifs(graph = transcriptional.network, size = 3)
+signf.motif = apply(random.3.nodes, 2, function(col) sum(true.3.nodes <= col) / number.randomizations)
+
+# Imprime los p-values y motivos significativos
+cat("P-value para autorregulaciones:", p_value_auto, "\n")
+cat("P-value para correlaciones:", p_value_cor, "\n")
+cat("Motivos de 3 nodos significativos:", signf.motif, "\n")
+
+# Visualización del subgrafo isomórfico
+plot.igraph(graph.isocreate(size = 3, number = 14, directed = TRUE))
+
